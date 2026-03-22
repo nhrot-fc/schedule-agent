@@ -1,0 +1,68 @@
+[project]
+name = "python-backend-template"
+version = "0.1.0"
+description = "Backend Template"
+readme = "README.md"
+requires-python = ">=3.14, <3.15"
+dependencies = [
+    "fastapi[standard]>=0.135.1",
+    "sqlalchemy>=2.0.48",
+    "psycopg2-binary>=2.9.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "ruff>=0.15.6",
+    "ty>=0.0.23",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+indent-width = 4
+line-length = 100
+exclude = [
+    ".git",
+    ".ruff_cache",
+    ".venv",
+    "__pypackages__",
+    "build",
+    "dist",
+    "venv",
+    "migrations", # Ignore generated DB migrations
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade (modernizes syntax)
+    "RUF", # ruff-specific rules
+    "B",   # flake8-bugbear (finds likely bugs)
+    "SIM", # flake8-simplify (simplifies code)
+    "PT",  # flake8-pytest-style (standardizes tests)
+    "RET", # flake8-return (checks return values)
+]
+ignore = [
+    "E501", # Line too long (handled by the formatter)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "application", "data", "domain", "infrastructure"]
+combine-as-imports = true
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = 100
+indent-style = "space"
+line-ending = "auto"
+quote-style = "double"
+
+[tool.ty.environment]
+python-version = "3.14"
+root = ["./src"]
