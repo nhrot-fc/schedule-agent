@@ -9,7 +9,27 @@ from googleapiclient.discovery import build
 
 from infrastructure.config import settings
 
-SCOPES: list[str] = ["https://www.googleapis.com/auth/calendar.events"]
+SCOPES: list[str] = [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "openid",
+]
+
+
+def credentials_from_db_user(user) -> Credentials:
+    """Reconstruye el objeto Credentials de Google a partir de la Base de Datos."""
+    creds = Credentials(
+        token=user.google_access_token,
+        refresh_token=user.google_refresh_token,
+        token_uri=user.google_token_uri,
+        client_id=user.google_client_id,
+        client_secret=user.google_client_secret,
+        scopes=user.google_scopes.split(",") if user.google_scopes else SCOPES,
+    )
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    return creds
 
 
 def get_google_flow() -> Flow:
@@ -101,7 +121,9 @@ def create_calendar_event(creds: Credentials, event_details: dict[str, Any]) -> 
     """
     service = build("calendar", "v3", credentials=creds)
 
-    start_datetime = f"{event_details.get('date', '')}T{event_details.get('time', '00:00')}:00"
+    start_datetime = (
+        f"{event_details.get('date', '')}T{event_details.get('time', '00:00')}:00"
+    )
 
     start_dt = datetime.fromisoformat(start_datetime)
     end_dt = start_dt + timedelta(minutes=30)
@@ -122,3 +144,34 @@ def create_calendar_event(creds: Credentials, event_details: dict[str, Any]) -> 
 
     event_result = service.events().insert(calendarId="primary", body=event).execute()
     return event_result.get("htmlLink", "")
+
+
+def get_calendar_events(
+    creds: Credentials, max_results: int = 15
+) -> list[dict[str, Any]]:
+    """Obtiene los próximos eventos del calendario del usuario."""
+    service = build("calendar", "v3", credentials=creds)
+
+    # Obtener la hora actual en formato RFC3339 (requerido por Google)
+    now = datetime.utcnow().isoformat() + "Z"
+
+    # Llamar a la API de Google Calendar
+    events_result = (
+        service.events()
+        .list(
+            calendarId="primary",
+            timeMin=now,
+            maxResults=max_results,
+            singleEvents=True,
+            orderBy="startTime",
+        )
+        .execute()
+    )
+
+    return events_result.get("items", [])
+
+
+def delete_calendar_event(creds: Credentials, event_id: str) -> None:
+    """Elimina un evento específico del calendario."""
+    service = build("calendar", "v3", credentials=creds)
+    service.events().delete(calendarId="primary", eventId=event_id).execute()

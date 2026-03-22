@@ -1,59 +1,56 @@
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import RedirectResponse
-from google.oauth2.credentials import Credentials
+from typing import Annotated
 
-from domain.third_party.google_service import create_ephemeral_token, get_google_flow
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
+
+from data.repositories.user_repository import UserRepository
+from domain.services.user_service import UserService
+from domain.third_party.google_service import get_google_flow
+from infrastructure.database import get_db
 
 router = APIRouter()
 
 
 @router.get("/login", response_class=RedirectResponse)
-async def login() -> RedirectResponse:
-    """
-    Generates the Google OAuth consent screen authorization URL
-    and redirects the user to it.
-
-    Returns:
-        RedirectResponse: Redirection to the authorization URL.
-    """
+async def login() -> Response:
     flow = get_google_flow()
-    authorization_url, _ = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
+    authorization_url, _state = flow.authorization_url(
+        access_type="offline", include_granted_scopes="true", prompt="consent"
     )
-    return RedirectResponse(url=authorization_url)
+    response = RedirectResponse(url=authorization_url)
+    response.set_cookie(
+        key="code_verifier",
+        value=flow.code_verifier or "",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+    )
+    return response
 
 
 @router.get("/callback", response_class=RedirectResponse)
-async def auth_callback(code: str = Query(...)) -> RedirectResponse:
-    """
-    Handles the Google redirect, fetches the access token, generates
-    an encrypted session token, and redirects back to the frontend.
-
-    Args:
-        code (str): The authorization code returned by Google.
-
-    Returns:
-        RedirectResponse: Redirection to the frontend dashboard containing
-            the generated session token.
-
-    Raises:
-        HTTPException: Raised if the OAuth process fails or the token
-            cannot be fetched.
-    """
+async def auth_callback(
+    request: Request,
+    code: Annotated[str, Query(...)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
     try:
-        flow = get_google_flow()
-        flow.fetch_token(code=code)
-        credentials = flow.credentials
-        if not isinstance(credentials, Credentials):
-            raise ValueError("Failed to obtain valid credentials from Google.")
+        code_verifier = request.cookies.get("code_verifier")
+        if not code_verifier:
+            raise ValueError("Sesión expirada. Intenta iniciar sesión de nuevo.")
 
-        session_token = create_ephemeral_token(credentials)
-        frontend_url = f"http://localhost:3000/dashboard?token={session_token}"
+        user_repo = UserRepository(db)
+        user_service = UserService(user_repo)
 
-        return RedirectResponse(url=frontend_url)
-    except ValueError as ve:
-        raise HTTPException(status_code=422, detail=str(ve)) from ve
+        app_token = user_service.authenticate_google_user(code, code_verifier)
+
+        # 4. Redirigir a React
+        response = RedirectResponse(
+            url=f"http://localhost:5173/dashboard?token={app_token}"
+        )
+        response.delete_cookie(key="code_verifier")
+        return response
+
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Authentication failed: {e}") from e
+        raise HTTPException(status_code=400, detail=str(e)) from e
