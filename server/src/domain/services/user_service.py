@@ -49,7 +49,6 @@ class UserService:
         return UserModel(**data)
 
     def authenticate_google_user(self, code: str, code_verifier: str) -> str:
-        """Procesa el callback de Google, gestiona al usuario y devuelve un session JWT."""
         flow = get_google_flow()
         flow.code_verifier = code_verifier
         flow.fetch_token(code=code)
@@ -61,7 +60,7 @@ class UserService:
         email = user_info.get("email")
         name = user_info.get("name")
         if not email:
-            raise ValueError("El correo electrónico es requerido para registrarse.")
+            raise ValueError("Email is required to register.")
 
         token_uri_str = getattr(
             credentials, "token_uri", "https://oauth2.googleapis.com/token"
@@ -83,7 +82,6 @@ class UserService:
 
         user = self.create_or_update_user(user_entity)
 
-        # Generar JWT de la aplicación
         payload = {
             "sub": str(user.id),
             "exp": datetime.now(UTC) + timedelta(days=7),

@@ -38,14 +38,13 @@ async def auth_callback(
     try:
         code_verifier = request.cookies.get("code_verifier")
         if not code_verifier:
-            raise ValueError("Sesión expirada. Intenta iniciar sesión de nuevo.")
+            raise ValueError("Session expired. Please log in again.")
 
         user_repo = UserRepository(db)
         user_service = UserService(user_repo)
 
         app_token = user_service.authenticate_google_user(code, code_verifier)
 
-        # 4. Redirigir a React
         response = RedirectResponse(
             url=f"http://localhost:5173/dashboard?token={app_token}"
         )

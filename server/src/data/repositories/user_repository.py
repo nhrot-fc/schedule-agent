@@ -20,7 +20,7 @@ class UserRepository:
         return user
 
     def update(self, user: UserModel) -> UserModel:
-        self.db.merge(user)
+        merged_user = self.db.merge(user)
         self.db.commit()
-        self.db.refresh(user)
-        return user
+        self.db.refresh(merged_user)
+        return merged_user

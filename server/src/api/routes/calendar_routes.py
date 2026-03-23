@@ -1,43 +1,45 @@
-from fastapi import APIRouter, Depends, Header, HTTPException
+import json
+from typing import Annotated
 
+from fastapi import APIRouter, Depends, HTTPException
+
+from api.dependencies.auth import get_current_user, get_current_user as verify_token
 from api.schemas.calendar import ToolCallRequest, ToolCallResult, WebhookResponse
+from domain.entities.user import UserEntity
 from domain.third_party.google_service import (
     create_calendar_event,
-    decode_ephemeral_token,
+    credentials_from_db_user,
     delete_calendar_event,
     get_calendar_events,
 )
+from infrastructure.database import SessionLocal
 
 router = APIRouter()
 
 
-async def get_session_token(authorization: str = Header(None)) -> str:
-    """Extrae el JWT token del header Authorization: Bearer <token>"""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401, detail="Token de sesión faltante o inválido."
-        )
-    return authorization.split(" ")[1]
-
-
 @router.get("/events")
-async def list_events(token: str = Depends(get_session_token)):
-    """Devuelve los próximos eventos para renderizarlos en React."""
+async def list_events(
+    current_user: Annotated[UserEntity, Depends(get_current_user)],
+    time_min: str | None = None,
+    time_max: str | None = None,
+):
     try:
-        creds = decode_ephemeral_token(token)
-        events = get_calendar_events(creds)
+        creds = credentials_from_db_user(current_user)
+        events = get_calendar_events(creds, time_min=time_min, time_max=time_max)
         return {"events": events}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.delete("/events/{event_id}")
-async def cancel_event(event_id: str, token: str = Depends(get_session_token)):
-    """Cancela un evento desde la interfaz web."""
+async def cancel_event(
+    current_user: Annotated[UserEntity, Depends(get_current_user)],
+    event_id: str,
+):
     try:
-        creds = decode_ephemeral_token(token)
+        creds = credentials_from_db_user(current_user)
         delete_calendar_event(creds, event_id)
-        return {"status": "success", "message": "Evento eliminado."}
+        return {"status": "success", "message": "Event deleted."}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -45,42 +47,77 @@ async def cancel_event(event_id: str, token: str = Depends(get_session_token)):
 @router.post("/webhook", response_model=WebhookResponse)
 async def calendar_webhook(
     payload: ToolCallRequest,
-) -> WebhookResponse | dict[str, str]:
-    """
-    Webhook endpoint triggered by the voice assistant tool call.
+) -> WebhookResponse:
+    message_data = payload.message or {}
+    tool_calls = message_data.get("toolCalls", [])
+    if not tool_calls and "toolCall" in message_data:
+        tool_calls = [message_data["toolCall"]]
 
-    Extracts the session token from the custom data, decodes the Google
-    credentials, and schedules an event on the user's primary calendar.
+    if not tool_calls:
+        return WebhookResponse(error="No tool calls found")
 
-    Args:
-        payload (ToolCallRequest): The incoming webhook payload.
+    tool_call = tool_calls[0]
+    tool_call_id = tool_call.get("id", "unknown_id")
 
-    Returns:
-        WebhookResponse | dict[str, str]: A success payload with the event link,
-            or an error structure if creation failed.
-    """
     try:
-        tool_call = payload.message.get("toolCall", {})
-        args = tool_call.get("parameters", {})
+        args = tool_call.get("function", {}).get("arguments", {})
+        if not args:
+            args = tool_call.get("parameters", {})
 
-        token = (
-            payload.message.get("call", {}).get("customData", {}).get("sessionToken")
-        )
+        if isinstance(args, str):
+            args = json.loads(args)
+
+        call_data = message_data.get("call", {})
+
+        token = message_data.get("variableValues", {}).get("sessionToken")
+        if not token:
+            token = message_data.get("variables", {}).get("sessionToken")
+        if not token:
+            token = (
+                call_data.get("assistantOverrides", {})
+                .get("variableValues", {})
+                .get("sessionToken")
+            )
+        if not token:
+            token = call_data.get("variableValues", {}).get("sessionToken")
+        if not token:
+            token = call_data.get("customData", {}).get("sessionToken")
 
         if not token:
-            raise ValueError("No session token provided to webhook.")
+            raise ValueError("No session token received. User must log in.")
 
-        creds = decode_ephemeral_token(token)
-        event_link = create_calendar_event(creds, args)
+        db = SessionLocal()
+        try:
+            current_user = verify_token(token=token, db=db)
+            creds = credentials_from_db_user(current_user)
+            event_link = create_calendar_event(creds, args)
+        finally:
+            db.close()
+
+        title = args.get("title", "Meeting")
+        date = args.get("date", "unknown")
+        time = args.get("time", "unknown")
+        duration = args.get("duration_minutes", 30)
+
+        success_msg = f"SUCCESS: Event '{title}' scheduled for {date} at {time} ({duration} mins). Link: {event_link}. Please confirm to the user."
 
         return WebhookResponse(
             results=[
                 ToolCallResult(
-                    toolCallId=tool_call.get("id", ""),
-                    result=f"Event successfully created. Calendar link: {event_link}",
+                    toolCallId=tool_call_id,
+                    result=success_msg,
                 )
             ]
         )
 
     except Exception as e:
-        return {"error": str(e)}
+        error_msg = f"ERROR scheduling event: {e}. Please apologize to the user."
+
+        return WebhookResponse(
+            results=[
+                ToolCallResult(
+                    toolCallId=tool_call_id,
+                    result=error_msg,
+                )
+            ]
+        )

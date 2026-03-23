@@ -18,7 +18,6 @@ def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UserEntity:
-    """Verifica el JWT de la app y devuelve el usuario de la base de datos."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="No se pudieron validar las credenciales",
@@ -38,5 +37,8 @@ def get_current_user(
         user = user_service.get_user_by_id(int(user_id))
     except (ValueError, TypeError) as e:
         raise credentials_exception from e
+
+    if user is None:
+        raise credentials_exception
 
     return user

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -18,7 +18,6 @@ SCOPES: list[str] = [
 
 
 def credentials_from_db_user(user) -> Credentials:
-    """Reconstruye el objeto Credentials de Google a partir de la Base de Datos."""
     creds = Credentials(
         token=user.google_access_token,
         refresh_token=user.google_refresh_token,
@@ -33,13 +32,6 @@ def credentials_from_db_user(user) -> Credentials:
 
 
 def get_google_flow() -> Flow:
-    """
-    Initializes and returns the Google OAuth flow from environment config.
-
-    Returns:
-        Flow: An instance of `google_auth_oauthlib.flow.Flow` configured
-            with the needed client ID, secret, and scopes.
-    """
     client_config = {
         "web": {
             "client_id": settings.google_client_id,
@@ -56,16 +48,6 @@ def get_google_flow() -> Flow:
 
 
 def create_ephemeral_token(credentials: Credentials) -> str:
-    """
-    Encrypts the OAuth credentials into a stateless, time-limited JWT.
-
-    Args:
-        credentials (Credentials): The decoded Google API credentials.
-
-    Returns:
-        str: An encoded JWT string carrying the serialized credentials
-            and an expiration time.
-    """
     payload = {
         "token": credentials.token,
         "refresh_token": credentials.refresh_token,
@@ -79,16 +61,6 @@ def create_ephemeral_token(credentials: Credentials) -> str:
 
 
 def decode_ephemeral_token(token: str) -> Credentials:
-    """
-    Decrypts the provided JWT and reconstitutes the Google Credentials object,
-    refreshing it via the Google API if the token has expired.
-
-    Args:
-        token (str): The stateless JWT session string.
-
-    Returns:
-        Credentials: Authenticated Google credentials object instance.
-    """
     payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
 
     creds = Credentials(
@@ -107,71 +79,60 @@ def decode_ephemeral_token(token: str) -> Credentials:
 
 
 def create_calendar_event(creds: Credentials, event_details: dict[str, Any]) -> str:
-    """
-    Creates an event on the user's primary calendar using the given credentials.
-
-    Args:
-        creds (Credentials): Validated Google API credentials for a user.
-        event_details (dict[str, Any]): Dictionary containing event data
-            including 'date', 'time', 'title', and 'name'.
-
-    Returns:
-        str: The URL linking to the publicly visible, dynamically generated
-            calendar event.
-    """
     service = build("calendar", "v3", credentials=creds)
 
-    start_datetime = (
-        f"{event_details.get('date', '')}T{event_details.get('time', '00:00')}:00"
-    )
-
+    start_datetime = f"{event_details['date']}T{event_details['time']}:00"
     start_dt = datetime.fromisoformat(start_datetime)
-    end_dt = start_dt + timedelta(minutes=30)
+
+    duration_minutes = int(event_details.get("duration_minutes", 60))
+    end_dt = start_dt + timedelta(minutes=duration_minutes)
+
     end_datetime = end_dt.isoformat()
 
     event = {
-        "summary": event_details.get("title", "AI Scheduled Meeting"),
-        "description": f"Scheduled by Voice Assistant for {event_details.get('name', 'Unknown User')}.",
+        "summary": event_details.get("title", "AI Scheduled Task"),
+        "description": f"Scheduled by Riley for {event_details.get('name', 'User')}.",
         "start": {
             "dateTime": start_datetime,
-            "timeZone": "UTC",
+            "timeZone": "America/Lima",
         },
         "end": {
             "dateTime": end_datetime,
-            "timeZone": "UTC",
+            "timeZone": "America/Lima",
         },
     }
 
     event_result = service.events().insert(calendarId="primary", body=event).execute()
-    return event_result.get("htmlLink", "")
+    return event_result.get("htmlLink")
 
 
 def get_calendar_events(
-    creds: Credentials, max_results: int = 15
+    creds: Credentials,
+    time_min: str | None = None,
+    time_max: str | None = None,
+    max_results: int = 100,
 ) -> list[dict[str, Any]]:
-    """Obtiene los próximos eventos del calendario del usuario."""
     service = build("calendar", "v3", credentials=creds)
 
-    # Obtener la hora actual en formato RFC3339 (requerido por Google)
-    now = datetime.utcnow().isoformat() + "Z"
+    if not time_min:
+        time_min = datetime.now(UTC).isoformat() + "Z"
 
-    # Llamar a la API de Google Calendar
-    events_result = (
-        service.events()
-        .list(
-            calendarId="primary",
-            timeMin=now,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime",
-        )
-        .execute()
-    )
+    request_kwargs = {
+        "calendarId": "primary",
+        "timeMin": time_min,
+        "maxResults": max_results,
+        "singleEvents": True,
+        "orderBy": "startTime",
+    }
+
+    if time_max:
+        request_kwargs["timeMax"] = time_max
+
+    events_result = service.events().list(**request_kwargs).execute()
 
     return events_result.get("items", [])
 
 
 def delete_calendar_event(creds: Credentials, event_id: str) -> None:
-    """Elimina un evento específico del calendario."""
     service = build("calendar", "v3", credentials=creds)
     service.events().delete(calendarId="primary", eventId=event_id).execute()

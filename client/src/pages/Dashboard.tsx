@@ -1,166 +1,297 @@
-import { useEffect, useState } from 'react';
-import Vapi from '@vapi-ai/web';
+import { useEffect, useState } from "react"
+import Vapi from "@vapi-ai/web"
+import { startOfWeek, endOfWeek } from "date-fns"
+import { type CalendarEvent, WeeklyCalendar } from "@/components/WeeklyCalendar"
+import { Button } from "@/components/ui/button"
+import { Loader2, Phone, PhoneOff } from "lucide-react"
 
-const VAPI_PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY || "";
-const vapi = VAPI_PUBLIC_KEY ? new Vapi(VAPI_PUBLIC_KEY) : null;
+const VAPI_PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY || ""
+const vapi = VAPI_PUBLIC_KEY ? new Vapi(VAPI_PUBLIC_KEY) : null
 
-// Interfaz para tipar los eventos que llegan del backend
-interface CalendarEvent {
-  id: string;
-  summary: string;
-  start: { dateTime?: string; date?: string };
-  htmlLink: string;
+interface UserProfile {
+  id: number
+  email: string
+  name: string
 }
 
 export default function Dashboard() {
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
-  const [callActive, setCallActive] = useState(false);
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [sessionToken, setSessionToken] = useState<string | null>(null)
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
+  const [callActive, setCallActive] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(false)
+  const [events, setEvents] = useState<CalendarEvent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [currentDate, setCurrentDate] = useState(new Date())
 
   useEffect(() => {
-    const queryParameters = new URLSearchParams(window.location.search);
-    const token = queryParameters.get("token");
+    const queryParameters = new URLSearchParams(window.location.search)
+    const tokenFromUrl = queryParameters.get("token")
 
-    if (token) {
-      setSessionToken(token);
-      window.history.replaceState({}, document.title, "/dashboard");
-      // Cargar eventos inmediatamente tras obtener el token
-      fetchEvents(token);
+    const activeToken = tokenFromUrl || localStorage.getItem("sessionToken")
+
+    if (tokenFromUrl) {
+      localStorage.setItem("sessionToken", tokenFromUrl)
+      window.history.replaceState({}, document.title, "/dashboard")
     }
 
-    if (!vapi) return;
+    if (!activeToken) {
+      window.location.href = "/"
+      return
+    }
 
-    vapi.on("call-start", () => setCallActive(true));
-    vapi.on("call-end", () => {
-      setCallActive(false);
-      // Recargar la lista de eventos cuando la llamada termine (por si la IA agendó algo)
-      if (token) fetchEvents(token);
-    });
+    setSessionToken(activeToken)
+    fetchUserProfile(activeToken)
+    fetchEvents(activeToken, currentDate)
+
+    if (vapi) {
+      vapi.on("call-start", () => {
+        setCallActive(true)
+        setIsConnecting(false)
+      })
+      vapi.on("call-end", () => {
+        setCallActive(false)
+        setIsConnecting(false)
+        fetchEvents(activeToken, currentDate)
+      })
+      vapi.on("error", (error) => {
+        console.error("Vapi Error:", error)
+        setCallActive(false)
+        setIsConnecting(false)
+      })
+
+      vapi.on("message", (message: any) => {
+        if (message.type === "tool-calls") {
+          const toolCalls = message.toolCalls || message.toolCallList || []
+
+          toolCalls.forEach((tc: any) => {
+            if (tc.function?.name === "Calendar") {
+              try {
+                const args = typeof tc.function.arguments === 'string'
+                  ? JSON.parse(tc.function.arguments)
+                  : tc.function.arguments
+
+                const startDateTime = `${args.date}T${args.time}:00`
+                const startDate = new Date(startDateTime)
+                const durationMinutes = args.duration_minutes || 30
+                const endDate = new Date(startDate.getTime() + durationMinutes * 60000)
+
+                const optimisticEvent: CalendarEvent = {
+                  id: `temp-${Date.now()}`,
+                  summary: `⏳ ${args.title || 'Scheduling...'}`,
+                  start: { dateTime: startDate.toISOString() },
+                  end: { dateTime: endDate.toISOString() },
+                  htmlLink: "#"
+                }
+
+                setEvents((prev) => [...prev, optimisticEvent])
+
+                setTimeout(() => {
+                  fetchEvents(activeToken, currentDate)
+                }, 3000)
+
+              } catch (e) {
+                console.error("Error procesando Optimistic UI:", e)
+                setTimeout(() => fetchEvents(activeToken, currentDate), 3000)
+              }
+            }
+          })
+        }
+      })
+    }
 
     return () => {
-      vapi.removeAllListeners();
-    };
-  }, []);
+      if (vapi) vapi.removeAllListeners()
+    }
+  }, [currentDate])
 
-  // --- Funciones de la API ---
-
-  const fetchEvents = async (token: string) => {
-    setLoading(true);
+  const fetchUserProfile = async (token: string) => {
     try {
-      const response = await fetch("http://localhost:8000/api/v1/calendar/events", {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
+      const response = await fetch("http://localhost:8000/api/v1/users/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      })
       if (response.ok) {
-        const data = await response.json();
-        setEvents(data.events || []);
+        const data = await response.json()
+        setUserProfile(data)
+      } else {
+        handleLogout()
       }
     } catch (error) {
-      console.error("Error fetching events:", error);
+      console.error("Error fetching user:", error)
     }
-    setLoading(false);
-  };
+  }
 
-  const cancelEvent = async (eventId: string) => {
-    if (!sessionToken) return;
+  const fetchEvents = async (token: string, date: Date) => {
+    setLoading(true)
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/calendar/events/${eventId}`, {
-        method: "DELETE",
-        headers: { "Authorization": `Bearer ${sessionToken}` }
-      });
+      const start = startOfWeek(date, { weekStartsOn: 0 }).toISOString()
+      const end = endOfWeek(date, { weekStartsOn: 0 }).toISOString()
+
+      const response = await fetch(
+        `http://localhost:8000/api/v1/calendar/events?time_min=${start}&time_max=${end}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      )
       if (response.ok) {
-        // Actualizar la UI filtrando el evento eliminado
-        setEvents(prev => prev.filter(e => e.id !== eventId));
+        const data = await response.json()
+        setEvents(data.events || [])
       }
     } catch (error) {
-      console.error("Error cancelling event:", error);
+      console.error("Error fetching events:", error)
     }
-  };
+    setLoading(false)
+  }
 
-  // --- Control de Llamada ---
+  const handleCancelEvent = async (eventId: string) => {
+    if (!sessionToken) return
+
+    setEvents((prev) => prev.filter((e) => e.id !== eventId))
+
+    try {
+      const response = await fetch(
+        `http://localhost:8000/api/v1/calendar/events/${eventId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        }
+      )
+
+      if (!response.ok) {
+        fetchEvents(sessionToken, currentDate)
+      }
+    } catch (error) {
+      console.error("Error cancelling event:", error)
+      fetchEvents(sessionToken, currentDate)
+    }
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem("sessionToken")
+    window.location.href = "/"
+  }
 
   const toggleCall = () => {
-    if (!vapi) return;
-    if (callActive) {
-      vapi.stop();
+    if (!vapi) return
+    if (callActive || isConnecting) {
+      vapi.stop()
+      setIsConnecting(false)
     } else {
-      const assistantId = import.meta.env.VITE_VAPI_ASSISTANT_ID;
+      setIsConnecting(true)
+      const assistantId = import.meta.env.VITE_VAPI_ASSISTANT_ID
+
+      const now = new Date()
+      const currentDate = now.toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })
+      const currentTime = now.toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+
+      const eventsContext =
+        events.length > 0
+          ? events
+            .map((e) => {
+              const dateVal = e.start.dateTime || e.start.date
+              const dateStr = dateVal
+                ? new Date(dateVal).toLocaleString()
+                : "Fecha desconocida"
+              return `- ${e.summary} (${dateStr})`
+            })
+            .join("\n")
+          : "No scheduled events."
+
       vapi.start(assistantId, {
         clientMessages: [
-            "transcript", 
-            "tool-calls", 
-            "function-call", 
-            "status-update"
+          "transcript",
+          "tool-calls",
+          "function-call",
+          "status-update",
         ] as any,
         variableValues: {
-          sessionToken: sessionToken
-        }
-      });
+          sessionToken: sessionToken,
+          userName: userProfile?.name || "Usuario",
+          currentDate: currentDate,
+          currentTime: currentTime,
+          existingEvents: eventsContext,
+        },
+      })
     }
-  };
+  }
 
-  // Helper para formatear la fecha
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return "Todo el día";
-    const date = new Date(dateString);
-    return date.toLocaleString('es-ES', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  };
+  if (!sessionToken || !userProfile) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-900">
+        Loading your secure session...
+      </div>
+    )
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-4xl mx-auto space-y-6">
-
-        {/* Cabecera */}
-        <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+    <div className="min-h-screen bg-gray-50 p-4 sm:p-8 text-gray-900">
+      <div className="mx-auto max-w-6xl space-y-6">
+        <div className="flex flex-col items-center justify-between gap-4 rounded-xl border border-gray-100 bg-white p-6 shadow-sm sm:flex-row">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Tu Agenda</h1>
-            <p className="text-sm text-gray-500">Administra tus reuniones por voz o manualmente</p>
+            <h1 className="text-2xl font-bold text-gray-900">
+              Hello, {userProfile.name}
+            </h1>
+            <p className="text-sm text-gray-500">
+              {userProfile.email}
+            </p>
           </div>
-          <button
-            onClick={toggleCall}
-            disabled={!sessionToken || !vapi}
-            className={`px-6 py-3 rounded-full font-semibold text-white transition-all shadow-md ${callActive
-                ? "bg-red-500 hover:bg-red-600 animate-pulse"
-                : "bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300"
-              }`}
-          >
-            {callActive ? "🔴 Finalizar Llamada" : "🎙️ Hablar con Riley"}
-          </button>
+          <div className="flex gap-3">
+            <Button
+              onClick={toggleCall}
+              disabled={isConnecting}
+              variant={callActive ? "destructive" : "default"}
+              className={`w-[180px] rounded-full px-6 py-2.5 font-semibold shadow-md transition-all ${callActive && !isConnecting ? "animate-pulse" : ""
+                }`}
+            >
+              {isConnecting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Connecting...
+                </>
+              ) : callActive ? (
+                <>
+                  <PhoneOff className="mr-2 h-4 w-4" />
+                  End Call
+                </>
+              ) : (
+                <>
+                  <Phone className="mr-2 h-4 w-4" />
+                  Start Call
+                </>
+              )}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={handleLogout}
+              className="rounded-full text-gray-600 hover:bg-red-50 hover:text-red-600"
+            >
+              Logout
+            </Button>
+          </div>
         </div>
 
-        {/* Lista de Eventos (UI Limpia) */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 min-h-[400px]">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Próximos Eventos</h2>
-
-          {loading ? (
-            <div className="text-center text-gray-500 py-10">Cargando agenda...</div>
-          ) : events.length === 0 ? (
-            <div className="text-center text-gray-500 py-10">No tienes eventos próximos programados.</div>
-          ) : (
-            <div className="space-y-3">
-              {events.map((event) => (
-                <div key={event.id} className="flex justify-between items-center p-4 border rounded-lg hover:bg-gray-50 transition">
-                  <div className="flex flex-col">
-                    <a href={event.htmlLink} target="_blank" rel="noreferrer" className="font-medium text-gray-900 hover:text-blue-600 hover:underline">
-                      {event.summary || "(Sin título)"}
-                    </a>
-                    <span className="text-sm text-gray-500">
-                      {formatDate(event.start.dateTime || event.start.date)}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => cancelEvent(event.id)}
-                    className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2 rounded-md transition text-sm font-medium"
-                  >
-                    Cancelar
-                  </button>
-                </div>
-              ))}
+        {loading ? (
+          <div className="flex h-[600px] items-center justify-center rounded-xl border border-gray-100 bg-white shadow-sm">
+            <div className="animate-pulse font-medium text-gray-400">
+              Syncing with Google Calendar...
             </div>
-          )}
-        </div>
-
+          </div>
+        ) : (
+          <WeeklyCalendar
+            events={events}
+            onCancelEvent={handleCancelEvent}
+            currentDate={currentDate}
+            onDateChange={setCurrentDate}
+          />
+        )}
       </div>
     </div>
-  );
+  )
 }
