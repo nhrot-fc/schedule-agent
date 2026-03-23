@@ -78,7 +78,9 @@ def decode_ephemeral_token(token: str) -> Credentials:
     return creds
 
 
-def create_calendar_event(creds: Credentials, event_details: dict[str, Any]) -> str:
+def create_calendar_event(
+    creds: Credentials, event_details: dict[str, Any], user_tz: str
+) -> str:
     service = build("calendar", "v3", credentials=creds)
 
     start_datetime = f"{event_details['date']}T{event_details['time']}:00"
@@ -94,11 +96,11 @@ def create_calendar_event(creds: Credentials, event_details: dict[str, Any]) -> 
         "description": f"Scheduled by Riley for {event_details.get('name', 'User')}.",
         "start": {
             "dateTime": start_datetime,
-            "timeZone": "America/Lima",
+            "timeZone": user_tz,
         },
         "end": {
             "dateTime": end_datetime,
-            "timeZone": "America/Lima",
+            "timeZone": user_tz,
         },
     }
 
@@ -136,3 +138,60 @@ def get_calendar_events(
 def delete_calendar_event(creds: Credentials, event_id: str) -> None:
     service = build("calendar", "v3", credentials=creds)
     service.events().delete(calendarId="primary", eventId=event_id).execute()
+
+
+def update_calendar_event(
+    creds: Credentials, event_id: str, event_details: dict[str, Any], user_tz: str
+) -> str:
+    service = build("calendar", "v3", credentials=creds)
+    event = service.events().get(calendarId="primary", eventId=event_id).execute()
+    if event_details.get("title"):
+        event["summary"] = event_details["title"]
+
+    if event_details.get("description"):
+        event["description"] = event_details["description"]
+
+    new_date = event_details.get("date")
+    new_time = event_details.get("time")
+
+    if new_date or new_time:
+        old_start = event.get("start", {})
+        if new_date:
+            final_date = new_date
+        else:
+            if "dateTime" in old_start:
+                final_date = old_start["dateTime"].split("T")[0]
+            elif "date" in old_start:
+                final_date = old_start["date"]
+            else:
+                final_date = datetime.now(UTC).strftime("%Y-%m-%d")
+
+        if new_time:
+            final_time = new_time[:5]
+        else:
+            if "dateTime" in old_start:
+                final_time = old_start["dateTime"].split("T")[1][:5]
+            else:
+                final_time = "09:00"
+
+        start_datetime = f"{final_date}T{final_time}:00"
+        start_dt = datetime.fromisoformat(start_datetime)
+
+        duration_minutes = int(event_details.get("duration_minutes", 60))
+        end_dt = start_dt + timedelta(minutes=duration_minutes)
+
+        event["start"] = {
+            "dateTime": start_dt.isoformat(),
+            "timeZone": user_tz,
+        }
+        event["end"] = {
+            "dateTime": end_dt.isoformat(),
+            "timeZone": user_tz,
+        }
+
+    updated_event = (
+        service.events()
+        .update(calendarId="primary", eventId=event_id, body=event)
+        .execute()
+    )
+    return updated_event.get("htmlLink")

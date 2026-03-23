@@ -1,6 +1,8 @@
+import urllib
+import urllib.parse
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -53,4 +55,6 @@ async def auth_callback(
         return response
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        error_message = urllib.parse.quote(str(e))
+        frontend_url = settings.frontend_url or "http://localhost:5173"
+        return RedirectResponse(url=f"{frontend_url}/?error={error_message}")
