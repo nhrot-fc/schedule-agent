@@ -44,3 +44,9 @@ The agent interacts with Google Calendar through a secure, multi-step process:
 * **Batching for Latency**: By grouping multiple tasks into a single tool call, the agent avoids "talking too much" and reduces the number of round-trips to the Google API.
 * **Context Management**: Implementing a **Debounce** on system updates prevents the agent from being overwhelmed by rapid UI changes, significantly reducing token consumption and costs.
 * **State Consistency**: Riley uses the Google Event ID as the "Source of Truth," ensuring that edits and deletions are always applied to the correct record.
+
+## Demo Logs
+
+![Render Logs](resources/Render_Logs.png)
+
+![Vapi Logs](resources/Vapi_Logs.png)
