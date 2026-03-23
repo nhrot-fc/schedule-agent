@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import Vapi from "@vapi-ai/web"
 import { startOfWeek, endOfWeek } from "date-fns"
 import { type CalendarEvent, WeeklyCalendar } from "@/components/WeeklyCalendar"
@@ -31,6 +31,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [currentDate, setCurrentDate] = useState(new Date())
   const [aiSpeaking, setAiSpeaking] = useState(false)
+  const prevEventsRef = useRef<CalendarEvent[]>([]);
 
   useEffect(() => {
     if (!vapi) return
@@ -100,6 +101,60 @@ export default function Dashboard() {
     if (!userProfile) fetchUserProfile(activeToken)
     fetchEvents(activeToken, currentDate, false)
   }, [currentDate])
+
+  const debounceTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!callActive || !vapi) {
+      prevEventsRef.current = events;
+      return;
+    }
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = setTimeout(() => {
+      const prevEvents = prevEventsRef.current;
+      const deleted = prevEvents.filter(prev => !events.find(curr => curr.id === prev.id));
+      const added = events.filter(curr => !prevEvents.find(prev => prev.id === curr.id));
+      const modified = events.filter(curr => {
+        const prev = prevEvents.find(p => p.id === curr.id);
+        return prev && (
+          prev.summary !== curr.summary ||
+          JSON.stringify(prev.start) !== JSON.stringify(curr.start)
+        );
+      });
+
+      let deltaContent = "";
+      if (deleted.length > 0) {
+        deltaContent += `Deleted events: ${deleted.map(e => `[ID: ${e.id}] ${e.summary}`).join(", ")}. `;
+      }
+      if (added.length > 0) {
+        deltaContent += `New events added: ${added.map(e => `[ID: ${e.id}] ${e.summary}`).join(", ")}. `;
+      }
+      if (modified.length > 0) {
+        deltaContent += `Modified events: ${modified.map(e => `[ID: ${e.id}] ${e.summary}`).join(", ")}. `;
+      }
+
+      if (deltaContent) {
+        vapi.send({
+          type: "add-message",
+          message: {
+            role: "system",
+            content: `[SYSTEM UPDATE - CALENDAR CHANGED]: ${deltaContent} Please use this information to update your internal state.`,
+          },
+        });
+      }
+
+      prevEventsRef.current = events;
+    }, 1500);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [events, callActive]);
 
   const fetchUserProfile = async (token: string) => {
     try {
