@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from data.repositories.user_repository import UserRepository
 from domain.services.user_service import UserService
 from domain.third_party.google_service import get_google_flow
+from infrastructure.config import settings
 from infrastructure.database import get_db
 
 router = APIRouter()
@@ -46,7 +47,7 @@ async def auth_callback(
         app_token = user_service.authenticate_google_user(code, code_verifier)
 
         response = RedirectResponse(
-            url=f"http://localhost:5173/dashboard?token={app_token}"
+            url=f"{settings.frontend_url}/dashboard?token={app_token}"
         )
         response.delete_cookie(key="code_verifier")
         return response

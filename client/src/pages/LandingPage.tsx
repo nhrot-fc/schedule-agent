@@ -1,6 +1,8 @@
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
+
 export default function LandingPage() {
   const handleGoogleLogin = () => {
-    window.location.href = "http://localhost:8000/api/v1/auth/login"
+    window.location.href = `${API_URL}/api/v1/auth/login`
   }
 
   return (

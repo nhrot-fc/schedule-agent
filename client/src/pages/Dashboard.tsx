@@ -7,6 +7,7 @@ import { Loader2, Phone, PhoneOff } from "lucide-react"
 
 const VAPI_PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY || ""
 const vapi = VAPI_PUBLIC_KEY ? new Vapi(VAPI_PUBLIC_KEY) : null
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
 
 interface UserProfile {
   id: number
@@ -106,7 +107,7 @@ export default function Dashboard() {
 
   const fetchUserProfile = async (token: string) => {
     try {
-      const response = await fetch("http://localhost:8000/api/v1/users/me", {
+      const response = await fetch(`${API_URL}/api/v1/users/me`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (response.ok) {
@@ -127,7 +128,7 @@ export default function Dashboard() {
       const end = endOfWeek(date, { weekStartsOn: 0 }).toISOString()
 
       const response = await fetch(
-        `http://localhost:8000/api/v1/calendar/events?time_min=${start}&time_max=${end}`,
+        `${API_URL}/api/v1/calendar/events?time_min=${start}&time_max=${end}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -149,7 +150,7 @@ export default function Dashboard() {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/api/v1/calendar/events/${eventId}`,
+        `${API_URL}/api/v1/calendar/events/${eventId}`,
         {
           method: "DELETE",
           headers: { Authorization: `Bearer ${sessionToken}` },
